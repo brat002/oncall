@@ -8,7 +8,7 @@ include variables.mk
 export SHELL     := bash
 export SHELLOPTS := pipefail:errexit
 MAKEFLAGS += --warn-undefined-variables
-MAKEFLAGS += --no-builtin-rule
+MAKEFLAGS += --no-builtin-rules
 
 .DEFAULT_GOAL: help
 
@@ -31,9 +31,6 @@ ifeq ($(PROJECTS),)
 $(error "PROJECTS variable must be defined in variables.mk")
 endif
 
-# First project is considered the primary one used for doc-validator.
-PRIMARY_PROJECT := $(subst /,-,$(firstword $(subst :, ,$(firstword $(PROJECTS)))))
-
 # Host port to publish container port to.
 ifeq ($(origin DOCS_HOST_PORT), undefined)
 export DOCS_HOST_PORT := 3002
@@ -44,12 +41,7 @@ ifeq ($(origin DOCS_IMAGE), undefined)
 export DOCS_IMAGE := grafana/docs-base:latest
 endif
 
-# Container image used for doc-validator linting.
-ifeq ($(origin DOC_VALIDATOR_IMAGE), undefined)
-export DOC_VALIDATOR_IMAGE := grafana/doc-validator:latest
-endif
-
-# Container image used for vale linting.
+# Container image used for Vale linting.
 ifeq ($(origin VALE_IMAGE), undefined)
 export VALE_IMAGE := grafana/vale:latest
 endif
@@ -70,15 +62,11 @@ ifeq ($(origin PULL), undefined)
 export PULL := true
 endif
 
-.PHONY: docs-rm
-docs-rm: ## Remove the docs container.
-	$(PODMAN) rm -f $(DOCS_CONTAINER)
-
 .PHONY: docs-pull
 docs-pull: ## Pull documentation base image.
 	$(PODMAN) pull -q $(DOCS_IMAGE)
 
-make-docs: ## Fetch the latest make-docs script.
+make-docs: ## Verify that the make-docs script is present in the working directory.
 make-docs:
 	if [[ ! -f "$(CURDIR)/make-docs" ]]; then
 		echo 'WARN: No make-docs script found in the working directory. Run `make update` to download it.' >&2
@@ -97,15 +85,7 @@ endif
 .PHONY: docs-debug
 docs-debug: ## Run Hugo web server with debugging enabled. TODO: support all SERVER_FLAGS defined in website Makefile.
 docs-debug: make-docs
-	WEBSITE_EXEC='hugo server --bind 0.0.0.0 --port 3002 --debug' $(CURDIR)/make-docs $(PROJECTS)
-
-.PHONY: doc-validator
-doc-validator: ## Run doc-validator on the entire docs folder which includes pulling the latest `DOC_VALIDATOR_IMAGE` (default: `grafana/doc-validator:latest`) container image. To not pull the image, set `PULL=false`.
-doc-validator: make-docs
-ifeq ($(PULL), true)
-	$(PODMAN) pull -q $(DOC_VALIDATOR_IMAGE)
-endif
-	DOCS_IMAGE=$(DOC_VALIDATOR_IMAGE) $(CURDIR)/make-docs $(PROJECTS)
+	WEBSITE_EXEC='hugo server --bind 0.0.0.0 --port 3002 --logLevel debug' $(CURDIR)/make-docs $(PROJECTS)
 
 .PHONY: vale
 vale: ## Run vale on the entire docs folder which includes pulling the latest `VALE_IMAGE` (default: `grafana/vale:latest`) container image. To not pull the image, set `PULL=false`.
@@ -120,3 +100,12 @@ update: ## Fetch the latest version of this Makefile and the `make-docs` script 
 	curl -s -LO https://raw.githubusercontent.com/grafana/writers-toolkit/main/docs/docs.mk
 	curl -s -LO https://raw.githubusercontent.com/grafana/writers-toolkit/main/docs/make-docs
 	chmod +x make-docs
+
+# ls static/templates/ | sed 's/-template\.md//' | xargs
+TOPIC_TYPES := concept multiple-tasks reference section task tutorial visualization
+.PHONY: $(patsubst %,topic/%,$(TOPIC_TYPES))
+topic/%: ## Create a topic from the Writers' Toolkit template. Specify the topic type as the target, for example, `make topic/task TOPIC_PATH=sources/my-new-topic.md`.
+$(patsubst %,topic/%,$(TOPIC_TYPES)):
+	$(if $(TOPIC_PATH),,$(error "You must set the TOPIC_PATH variable to the path where the $(@F) topic will be created. For example: make $(@) TOPIC_PATH=sources/my-new-topic.md"))
+	mkdir -p $(dir $(TOPIC_PATH))
+	curl -s -o $(TOPIC_PATH) https://raw.githubusercontent.com/grafana/writers-toolkit/refs/heads/main/docs/static/templates/$(@F)-template.md
